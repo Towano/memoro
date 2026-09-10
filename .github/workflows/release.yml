@@ -136,8 +136,22 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Download Linux binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Prepare image binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p image-bin/amd64 image-bin/arm64 image-data
+          tar -xzf "release-assets/memoro-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz" \
+            -C image-bin/amd64
+          tar -xzf "release-assets/memoro-${RELEASE_TAG}-aarch64-unknown-linux-gnu.tar.gz" \
+            -C image-bin/arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -162,7 +176,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile
+          file: Dockerfile.release
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
