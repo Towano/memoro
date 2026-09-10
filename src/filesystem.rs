@@ -3,14 +3,36 @@
 //! Mirrors `python/src/memoro/filesystem.py`: write data through a temporary
 //! file in the target directory, fsync it, then rename it over the target.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, Metadata, OpenOptions};
 use std::io;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(unix)]
+fn metadata_mode(metadata: &Metadata) -> u32 {
+    metadata.permissions().mode() & 0o7777
+}
+
+#[cfg(not(unix))]
+fn metadata_mode(_: &Metadata) -> u32 {
+    0o600
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+}
+
+#[cfg(not(unix))]
+fn set_mode(_: &Path, _: u32) -> io::Result<()> {
+    Ok(())
+}
 
 /// Atomically replace `target` with `data`.
 ///
@@ -19,10 +41,9 @@ static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// an existing target (or `0o600` for fresh files, like `tempfile.mkstemp`),
 /// and is renamed into place. Any failure removes the temporary file.
 pub fn atomic_replace(target: &Path, data: &[u8]) -> io::Result<()> {
-    let existing_mode: Option<u32> = match fs::metadata(target) {
-        Ok(metadata) => Some(metadata.permissions().mode() & 0o7777),
-        Err(_) => None,
-    };
+    let existing_mode = fs::metadata(target)
+        .ok()
+        .map(|metadata| metadata_mode(&metadata));
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -59,10 +80,7 @@ pub fn atomic_replace(target: &Path, data: &[u8]) -> io::Result<()> {
             handle.write_all(data)?;
             handle.sync_all()?;
             drop(handle);
-            fs::set_permissions(
-                &temporary,
-                fs::Permissions::from_mode(existing_mode.unwrap_or(0o600)),
-            )?;
+            set_mode(&temporary, existing_mode.unwrap_or(0o600))?;
             fs::rename(&temporary, target)
         })();
         if outcome.is_err() {
@@ -76,8 +94,11 @@ pub fn atomic_replace(target: &Path, data: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
+    #[cfg(unix)]
     fn mode_of(path: &Path) -> u32 {
         fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
@@ -94,6 +115,7 @@ mod tests {
         assert_eq!(fs::read(&target).unwrap(), &[0xff, 0x00, 0xfe]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn atomic_replace_preserves_the_existing_mode() {
         let directory = tempfile::tempdir().unwrap();

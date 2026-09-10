@@ -32,7 +32,7 @@ jobs:
             runner: ubuntu-latest
             cross: true
           - target: x86_64-apple-darwin
-            runner: macos-13
+            runner: macos-15-intel
             cross: false
           - target: aarch64-apple-darwin
             runner: macos-14
@@ -59,18 +59,17 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - name: Install cross compiler
+      - name: Install ARM Linux linker
         if: matrix.cross
-        uses: taiki-e/install-action@cross
+        run: sudo apt-get update && sudo apt-get install --yes gcc-aarch64-linux-gnu
 
       - name: Build binary
         shell: bash
-        run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --locked --target "${{ matrix.target }}"
-          else
-            cargo build --release --locked --target "${{ matrix.target }}"
-          fi
+        run: cargo build --release --locked --target "${{ matrix.target }}"
+        env:
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
       - name: Package binary
         shell: bash

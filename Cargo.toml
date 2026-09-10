@@ -1,6 +1,6 @@
 [package]
 name = "memoro"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A personal, Git-backed memory system for AI agents."
 documentation = "https://docs.rs/memoro"
