@@ -1,0 +1,60 @@
+name: Cleanup Actions history
+
+on:
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cleanup-actions-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    name: Keep the latest successful run per workflow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove obsolete runs and artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, subprocess
+          repo = os.environ["REPOSITORY"]
+          current = int(os.environ["CURRENT_RUN_ID"])
+          def items(endpoint, expr):
+              p = subprocess.run(["gh", "api", "--paginate", endpoint, "--jq", expr], check=True, capture_output=True, text=True)
+              for line in p.stdout.splitlines():
+                  if line.strip():
+                      value = json.loads(line); yield json.loads(value) if isinstance(value, str) else value
+          def remove(endpoint): subprocess.run(["gh", "api", "-X", "DELETE", endpoint], check=True)
+          runs = list(items(f"repos/{repo}/actions/runs?per_page=100", ".workflow_runs[] | @json"))
+          latest = {}
+          for run in runs:
+              if run.get("status") == "completed" and run.get("conclusion") == "success":
+                  key = str(run.get("workflow_id") or run.get("name"))
+                  if key not in latest or run.get("created_at", "") > latest[key].get("created_at", ""):
+                      latest[key] = run
+          keep = {int(run["id"]) for run in latest.values()}
+          runs_deleted = 0
+          for run in runs:
+              rid = int(run["id"])
+              if rid != current and run.get("status") == "completed" and rid not in keep:
+                  remove(f"repos/{repo}/actions/runs/{rid}"); runs_deleted += 1
+          artifacts_deleted = 0
+          for artifact in items(f"repos/{repo}/actions/artifacts?per_page=100", ".artifacts[] | @json"):
+              rid = (artifact.get("workflow_run") or {}).get("id")
+              if rid is None or int(rid) == current or int(rid) in keep: continue
+              remove(f"repos/{repo}/actions/artifacts/{artifact['id']}"); artifacts_deleted += 1
+          print(f"kept_successful_workflows={len(keep)}")
+          print(f"deleted_completed_runs={runs_deleted}")
+          print(f"deleted_artifacts={artifacts_deleted}")
+          PY
